@@ -1,6 +1,8 @@
 # DL — Universal Video Downloader
 
-A web app that downloads videos from any website. Paste a URL from YouTube, TikTok, Instagram, Twitter, or 1000+ other sites, pick a format, and save it to your PC.
+Web app that downloads videos from any website. Paste a URL from YouTube, TikTok, Instagram, Twitter, or 1000+ other sites, pick a format, and save it to your PC.
+
+Nothing is tracked. Nothing is stored. Files are deleted from the server the moment you download them.
 
 Built with FastAPI, React, Celery, and yt-dlp.
 
@@ -8,9 +10,10 @@ Built with FastAPI, React, Celery, and yt-dlp.
 
 ```
 Browser → Nginx → FastAPI (REST API) → Celery Worker → yt-dlp → Video File
-                                    ↕                ↕
-                                  SQLite           Redis
-                                (history)    (job queue + progress)
+                                              ↕
+                                            Redis
+                                    (temporary job state,
+                                     auto-expires in 10 min)
 ```
 
 1. User pastes a video URL
@@ -19,7 +22,9 @@ Browser → Nginx → FastAPI (REST API) → Celery Worker → yt-dlp → Video 
 4. Backend enqueues a Celery task to download the video asynchronously
 5. Celery worker downloads the video, publishing progress updates to Redis
 6. Frontend receives real-time progress via Server-Sent Events (SSE)
-7. User saves the completed file to their PC
+7. User clicks "Save to PC" — file is served and immediately deleted from the server
+8. Redis job data auto-expires — zero trace left behind
+
 
 ## Tech Stack
 
@@ -28,7 +33,7 @@ Browser → Nginx → FastAPI (REST API) → Celery Worker → yt-dlp → Video 
 | Backend | Python, FastAPI | REST API, video extraction, file serving |
 | Video Engine | yt-dlp, ffmpeg | Video extraction and downloading from 1000+ sites |
 | Task Queue | Celery, Redis | Async download processing with progress tracking |
-| Database | SQLite, SQLAlchemy | Download history and status persistence |
+| State | Redis (ephemeral) | Temporary job tracking, auto-expires |
 | Frontend | React, TypeScript, Vite | Single-page UI with real-time progress |
 | Progress | SSE (Server-Sent Events) | Real-time download progress streaming |
 | Infrastructure | Docker, Docker Compose, Nginx | Containerized deployment with reverse proxy |
@@ -62,13 +67,10 @@ Video downloads can take seconds to minutes. Running them inside the API request
 
 Celery runs downloads in a separate worker process with configurable concurrency. Redis serves double duty as the Celery message broker and the progress data transport (Pub/Sub for real-time updates, key-value for late-connecting clients).
 
-### Why SQLite over PostgreSQL?
-
-This is a single-user local application. SQLite requires no server process, no configuration, and no Docker service. It stores download history in a single file. If this needed multi-user support or concurrent write-heavy workloads, PostgreSQL would be the right choice — but for a local tool, SQLite avoids unnecessary infrastructure.
 
 ### Why React (Vite) over Next.js or plain HTML?
 
-The UI has interactive state: a phase-based workflow (paste → extract → select → download → done), real-time progress bars, format selection, and download history. Managing this with vanilla DOM manipulation would be fragile and verbose.
+The UI has interactive state: a phase-based workflow (paste → extract → select → download → done) and real-time progress bars. Managing this with vanilla DOM manipulation would be fragile and verbose.
 
 Next.js was ruled out because its strengths (server-side rendering, file-based routing, API routes) don't apply here. This is a single-page app with one workflow and no SEO requirements. Vite provides fast builds and hot module replacement without the overhead of a full framework.
 
@@ -85,17 +87,6 @@ Nginx sits in front of the app and handles:
 
 Without Nginx, you'd expose the Python process directly, which is slower for static files and less secure.
 
-### Why no GraphQL?
-
-The API has 6 endpoints with fixed request/response shapes. GraphQL shines when clients need flexible queries across complex, interconnected data (e.g., "get user's posts with their comments and the commenters' profiles"). Here, every request has a predictable shape — REST is simpler, faster to implement, and easier to debug with curl.
-
-### Why no Kubernetes or Terraform?
-
-The app runs 4 containers on a single machine. Docker Compose handles this in 40 lines of YAML. Kubernetes is designed for orchestrating dozens of services across multiple nodes with auto-scaling, rolling deployments, and self-healing. Using it here would add weeks of setup time and hundreds of lines of configuration for capabilities the project doesn't need.
-
-Terraform codifies infrastructure as code, which is valuable when managing cloud resources across environments. For a single Docker Compose deployment, it adds a layer of abstraction over a problem that doesn't exist yet.
-
-Both are tools worth learning — just not on this project.
 
 ## Quick Start
 
@@ -105,7 +96,7 @@ Both are tools worth learning — just not on this project.
 docker compose up --build
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
+Open [http://localhost:3001](http://localhost:3001)
 
 ### Local Development
 
@@ -143,24 +134,24 @@ DL/
 │   └── app/
 │       ├── main.py              # FastAPI app entry point
 │       ├── config.py            # Environment-based settings
-│       ├── database.py          # SQLite + SQLAlchemy
-│       ├── models.py            # Download model
 │       ├── schemas.py           # Request/response schemas
 │       ├── routers/
 │       │   ├── downloads.py     # REST endpoints
-│       │   └── events.py       # SSE progress streaming
+│       │   └── events.py        # SSE progress streaming
 │       ├── services/
 │       │   └── ytdlp_service.py # yt-dlp wrapper
-│       └── tasks/
-│           ├── celery_app.py    # Celery configuration
-│           └── download_task.py # Async download task
+│       ├── tasks/
+│       │   ├── celery_app.py    # Celery configuration
+│       │   └── download_task.py # Async download task
+│       └── utils/
+│           └── progress.py      # Redis job state + progress helpers
 └── frontend/
     ├── Dockerfile               # Multi-stage: Vite build → Nginx
     ├── nginx.conf               # Reverse proxy config
     └── src/
         ├── pages/Home.tsx       # Main page (state machine)
         ├── components/          # UI components
-        ├── hooks/               # Data fetching + SSE hooks
+        ├── hooks/               # SSE progress hook
         ├── api/client.ts        # API client
         └── types/index.ts       # TypeScript interfaces
 ```
@@ -171,8 +162,6 @@ DL/
 |--------|----------|-------------|
 | `POST` | `/api/extract` | Extract video info and available formats |
 | `POST` | `/api/downloads` | Start a new download |
-| `GET` | `/api/downloads` | List download history |
 | `GET` | `/api/downloads/:id` | Get download status |
-| `DELETE` | `/api/downloads/:id` | Delete download and file |
-| `GET` | `/api/downloads/:id/file` | Download the video file |
+| `GET` | `/api/downloads/:id/file` | Download the video file (auto-deletes after serving) |
 | `GET` | `/api/downloads/:id/progress` | SSE stream of download progress |
