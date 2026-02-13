@@ -1,0 +1,131 @@
+import { useEffect, useRef, useState } from "react";
+import type { DownloadRecord } from "../types";
+import { startDownload } from "../api/client";
+import { useVideoInfo } from "../hooks/useVideoInfo";
+import { useDownloadProgress } from "../hooks/useDownloadProgress";
+import { useDownloadHistory } from "../hooks/useDownloadHistory";
+import { UrlInput } from "../components/UrlInput";
+import { VideoPreview } from "../components/VideoPreview";
+import { FormatSelector } from "../components/FormatSelector";
+import { DownloadButton } from "../components/DownloadButton";
+import { DownloadCard } from "../components/DownloadCard";
+import { HistoryList } from "../components/HistoryList";
+
+type Phase = "idle" | "extracting" | "selecting" | "downloading" | "done";
+
+export function Home() {
+  const { videoInfo, loading: extracting, error: extractError, extract, reset } = useVideoInfo();
+  const { history, refresh, deleteDownload } = useDownloadHistory();
+
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [selectedFormat, setSelectedFormat] = useState<string | null>(null);
+  const [activeDownload, setActiveDownload] = useState<DownloadRecord | null>(null);
+  const [downloadLoading, setDownloadLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const progress = useDownloadProgress(
+    activeDownload && phase === "downloading" ? activeDownload.id : null
+  );
+
+  const prevProgressStatus = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!progress) return;
+    if (prevProgressStatus.current === progress.status) return;
+    prevProgressStatus.current = progress.status;
+
+    if (
+      (progress.status === "completed" || progress.status === "failed") &&
+      phase === "downloading"
+    ) {
+      setPhase("done");
+      refresh();
+    }
+  }, [progress, phase, refresh]);
+
+  const handleExtract = async (url: string) => {
+    setPhase("extracting");
+    setError(null);
+    setSelectedFormat(null);
+    setActiveDownload(null);
+    await extract(url);
+    setPhase("selecting");
+  };
+
+  const handleDownload = async () => {
+    if (!videoInfo || !selectedFormat) return;
+    setDownloadLoading(true);
+    setError(null);
+    try {
+      const record = await startDownload(videoInfo.url, selectedFormat);
+      setActiveDownload(record);
+      setPhase("downloading");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start download");
+    } finally {
+      setDownloadLoading(false);
+    }
+  };
+
+  const handleNewDownload = () => {
+    reset();
+    setPhase("idle");
+    setSelectedFormat(null);
+    setActiveDownload(null);
+    setError(null);
+    refresh();
+  };
+
+  return (
+    <div className="home">
+      <header className="header">
+        <h1>DL</h1>
+        <p className="subtitle">Download videos from anywhere</p>
+      </header>
+
+      <main className="main">
+        {(phase === "idle" || phase === "extracting" || phase === "selecting") && (
+          <UrlInput onSubmit={handleExtract} loading={extracting} />
+        )}
+
+        {extractError && <div className="error-banner">{extractError}</div>}
+        {error && <div className="error-banner">{error}</div>}
+
+        {videoInfo && phase === "selecting" && (
+          <div className="selection-section">
+            <VideoPreview video={videoInfo} />
+            <FormatSelector
+              formats={videoInfo.formats}
+              selected={selectedFormat}
+              onSelect={setSelectedFormat}
+            />
+            <DownloadButton
+              onClick={handleDownload}
+              disabled={!selectedFormat}
+              loading={downloadLoading}
+            />
+          </div>
+        )}
+
+        {activeDownload && (phase === "downloading" || phase === "done") && (
+          <div className="active-download-section">
+            <DownloadCard
+              download={activeDownload}
+              progress={progress}
+              onDelete={() => {
+                deleteDownload(activeDownload.id);
+                handleNewDownload();
+              }}
+            />
+            {phase === "done" && (
+              <button className="btn-secondary btn-new" onClick={handleNewDownload}>
+                Download Another
+              </button>
+            )}
+          </div>
+        )}
+
+        <HistoryList downloads={history} onDelete={deleteDownload} />
+      </main>
+    </div>
+  );
+}
