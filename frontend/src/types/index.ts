@@ -21,16 +21,12 @@ export interface DownloadRecord {
   id: string;
   url: string;
   title: string | null;
-  thumbnail: string | null;
   format_id: string | null;
-  quality_label: string | null;
   filename: string | null;
   filesize: number | null;
   status: "pending" | "downloading" | "processing" | "completed" | "failed";
   progress: number;
   error_message: string | null;
-  created_at: string;
-  completed_at: string | null;
 }
 
 export interface ProgressEvent {

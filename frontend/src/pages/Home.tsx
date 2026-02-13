@@ -3,19 +3,16 @@ import type { DownloadRecord } from "../types";
 import { startDownload } from "../api/client";
 import { useVideoInfo } from "../hooks/useVideoInfo";
 import { useDownloadProgress } from "../hooks/useDownloadProgress";
-import { useDownloadHistory } from "../hooks/useDownloadHistory";
 import { UrlInput } from "../components/UrlInput";
 import { VideoPreview } from "../components/VideoPreview";
 import { FormatSelector } from "../components/FormatSelector";
 import { DownloadButton } from "../components/DownloadButton";
 import { DownloadCard } from "../components/DownloadCard";
-import { HistoryList } from "../components/HistoryList";
 
 type Phase = "idle" | "extracting" | "selecting" | "downloading" | "done";
 
 export function Home() {
   const { videoInfo, loading: extracting, error: extractError, extract, reset } = useVideoInfo();
-  const { history, refresh, deleteDownload } = useDownloadHistory();
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [selectedFormat, setSelectedFormat] = useState<string | null>(null);
@@ -38,9 +35,8 @@ export function Home() {
       phase === "downloading"
     ) {
       setPhase("done");
-      refresh();
     }
-  }, [progress, phase, refresh]);
+  }, [progress, phase]);
 
   const handleExtract = async (url: string) => {
     setPhase("extracting");
@@ -72,14 +68,13 @@ export function Home() {
     setSelectedFormat(null);
     setActiveDownload(null);
     setError(null);
-    refresh();
   };
 
   return (
     <div className="home">
       <header className="header">
         <h1>DL</h1>
-        <p className="subtitle">Download videos from anywhere</p>
+        <p className="subtitle">Download videos from anywhere. Nothing is tracked or stored.</p>
       </header>
 
       <main className="main">
@@ -111,10 +106,6 @@ export function Home() {
             <DownloadCard
               download={activeDownload}
               progress={progress}
-              onDelete={() => {
-                deleteDownload(activeDownload.id);
-                handleNewDownload();
-              }}
             />
             {phase === "done" && (
               <button className="btn-secondary btn-new" onClick={handleNewDownload}>
@@ -123,8 +114,6 @@ export function Home() {
             )}
           </div>
         )}
-
-        <HistoryList downloads={history} onDelete={deleteDownload} />
       </main>
     </div>
   );

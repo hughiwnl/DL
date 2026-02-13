@@ -33,15 +33,6 @@ export async function startDownload(
   return res.json();
 }
 
-export async function getDownloads(): Promise<DownloadRecord[]> {
-  const res = await fetch(`${BASE}/downloads`);
-  return res.json();
-}
-
-export async function deleteDownload(id: string): Promise<void> {
-  await fetch(`${BASE}/downloads/${id}`, { method: "DELETE" });
-}
-
 export function getFileUrl(id: string): string {
   return `${BASE}/downloads/${id}/file`;
 }

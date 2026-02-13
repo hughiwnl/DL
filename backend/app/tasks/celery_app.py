@@ -6,6 +6,7 @@ celery_app = Celery(
     "dl_worker",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
+    include=["app.tasks.download_task"],
 )
 
 celery_app.conf.update(

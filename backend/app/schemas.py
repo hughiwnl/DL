@@ -34,16 +34,9 @@ class DownloadResponse(BaseModel):
     id: str
     url: str
     title: Optional[str] = None
-    thumbnail: Optional[str] = None
     format_id: Optional[str] = None
-    quality_label: Optional[str] = None
     filename: Optional[str] = None
     filesize: Optional[int] = None
     status: str
     progress: float
     error_message: Optional[str] = None
-    created_at: str
-    completed_at: Optional[str] = None
-
-    class Config:
-        from_attributes = True

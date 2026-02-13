@@ -5,13 +5,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.database import Base, engine
 from app.routers import downloads, events
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
     os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True)
     yield
 

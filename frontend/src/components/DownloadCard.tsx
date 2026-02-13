@@ -5,15 +5,6 @@ import { getFileUrl } from "../api/client";
 interface Props {
   download: DownloadRecord;
   progress?: ProgressEvent | null;
-  onDelete: (id: string) => void;
-}
-
-function formatFileSize(bytes: number | null): string {
-  if (!bytes) return "";
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function formatSpeed(bytesPerSec: number | undefined): string {
@@ -30,7 +21,7 @@ function formatEta(seconds: number | undefined): string {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 }
 
-export function DownloadCard({ download, progress, onDelete }: Props) {
+export function DownloadCard({ download, progress }: Props) {
   const isActive =
     download.status === "downloading" ||
     download.status === "processing" ||
@@ -50,21 +41,8 @@ export function DownloadCard({ download, progress, onDelete }: Props) {
             <span className={`status-badge ${currentStatus}`}>
               {currentStatus}
             </span>
-            {download.quality_label && (
-              <span className="quality-badge">{download.quality_label}</span>
-            )}
-            {download.filesize && (
-              <span>{formatFileSize(download.filesize)}</span>
-            )}
           </div>
         </div>
-        <button
-          className="btn-icon btn-delete"
-          onClick={() => onDelete(download.id)}
-          title="Delete"
-        >
-          x
-        </button>
       </div>
 
       {isActive && (
@@ -83,7 +61,7 @@ export function DownloadCard({ download, progress, onDelete }: Props) {
         </div>
       )}
 
-      {download.status === "completed" && download.filename && (
+      {currentStatus === "completed" && (
         <div className="download-card-actions">
           <a
             href={getFileUrl(download.id)}
@@ -95,7 +73,7 @@ export function DownloadCard({ download, progress, onDelete }: Props) {
         </div>
       )}
 
-      {download.status === "failed" && download.error_message && (
+      {currentStatus === "failed" && download.error_message && (
         <p className="download-error">{download.error_message}</p>
       )}
     </div>

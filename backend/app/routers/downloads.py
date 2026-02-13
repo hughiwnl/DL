@@ -3,13 +3,11 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, HTTPException
+from starlette.background import BackgroundTask
 from starlette.responses import FileResponse
 
 from app.config import settings
-from app.database import get_db
-from app.models import Download, DownloadStatus
 from app.schemas import (
     DownloadResponse,
     ExtractRequest,
@@ -18,6 +16,7 @@ from app.schemas import (
 )
 from app.services import ytdlp_service
 from app.tasks.download_task import download_video_task
+from app.utils.progress import get_job, set_job, delete_job
 
 router = APIRouter(prefix="/api")
 
@@ -32,89 +31,58 @@ async def extract_video_info(req: ExtractRequest):
 
 
 @router.post("/downloads", response_model=DownloadResponse, status_code=201)
-async def start_download(req: StartDownloadRequest, db: Session = Depends(get_db)):
+async def start_download(req: StartDownloadRequest):
     download_id = str(uuid4())
 
-    download = Download(
-        id=download_id,
-        url=str(req.url),
-        format_id=req.format_id,
-        status=DownloadStatus.PENDING,
-        progress=0.0,
-    )
-    db.add(download)
-    db.commit()
+    job = {
+        "id": download_id,
+        "url": str(req.url),
+        "format_id": req.format_id,
+        "status": "pending",
+        "progress": 0.0,
+        "title": None,
+        "filename": None,
+        "filesize": None,
+        "error_message": None,
+    }
+    set_job(download_id, job)
 
     task = download_video_task.delay(download_id, str(req.url), req.format_id)
+    job["celery_task_id"] = task.id
+    set_job(download_id, job)
 
-    download.celery_task_id = task.id
-    db.commit()
-    db.refresh(download)
-
-    return _to_response(download)
-
-
-@router.get("/downloads", response_model=list[DownloadResponse])
-async def list_downloads(db: Session = Depends(get_db)):
-    downloads = (
-        db.query(Download).order_by(Download.created_at.desc()).limit(50).all()
-    )
-    return [_to_response(d) for d in downloads]
+    return DownloadResponse(**job)
 
 
 @router.get("/downloads/{download_id}", response_model=DownloadResponse)
-async def get_download(download_id: str, db: Session = Depends(get_db)):
-    download = db.query(Download).filter(Download.id == download_id).first()
-    if not download:
-        raise HTTPException(status_code=404, detail="Download not found")
-    return _to_response(download)
-
-
-@router.delete("/downloads/{download_id}", status_code=204)
-async def delete_download(download_id: str, db: Session = Depends(get_db)):
-    download = db.query(Download).filter(Download.id == download_id).first()
-    if not download:
-        raise HTTPException(status_code=404, detail="Download not found")
-
-    if download.filename:
-        filepath = Path(settings.DOWNLOADS_DIR) / download.filename
-        if filepath.exists():
-            os.remove(filepath)
-
-    db.delete(download)
-    db.commit()
+async def get_download(download_id: str):
+    job = get_job(download_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Download not found or expired")
+    return DownloadResponse(**job)
 
 
 @router.get("/downloads/{download_id}/file")
-async def serve_file(download_id: str, db: Session = Depends(get_db)):
-    download = db.query(Download).filter(Download.id == download_id).first()
-    if not download or download.status != DownloadStatus.COMPLETED:
+async def serve_file(download_id: str):
+    job = get_job(download_id)
+    if not job or job.get("status") != "completed" or not job.get("filename"):
         raise HTTPException(status_code=404, detail="File not available")
 
-    filepath = Path(settings.DOWNLOADS_DIR) / download.filename
+    filepath = Path(settings.DOWNLOADS_DIR) / job["filename"]
     if not filepath.exists():
-        raise HTTPException(status_code=404, detail="File no longer exists on disk")
+        raise HTTPException(status_code=404, detail="File no longer exists")
+
+    def cleanup():
+        try:
+            if os.path.exists(str(filepath)):
+                os.remove(str(filepath))
+            delete_job(download_id)
+        except OSError:
+            pass
 
     return FileResponse(
         path=str(filepath),
-        filename=download.filename,
+        filename=job["filename"],
         media_type="application/octet-stream",
-    )
-
-
-def _to_response(download: Download) -> DownloadResponse:
-    return DownloadResponse(
-        id=download.id,
-        url=download.url,
-        title=download.title,
-        thumbnail=download.thumbnail,
-        format_id=download.format_id,
-        quality_label=download.quality_label,
-        filename=download.filename,
-        filesize=download.filesize,
-        status=download.status.value if download.status else "pending",
-        progress=download.progress or 0.0,
-        error_message=download.error_message,
-        created_at=str(download.created_at) if download.created_at else "",
-        completed_at=str(download.completed_at) if download.completed_at else None,
+        background=BackgroundTask(cleanup),
     )

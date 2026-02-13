@@ -1,24 +1,20 @@
 import time
 
-from sqlalchemy.sql import func
-
 from app.tasks.celery_app import celery_app
 from app.services.ytdlp_service import download_video
-from app.database import SessionLocal
-from app.models import Download, DownloadStatus
-from app.utils.progress import set_progress
+from app.utils.progress import set_progress, get_job, set_job
 from app.config import settings
 
 
 @celery_app.task(bind=True, name="download_video")
 def download_video_task(self, download_id: str, url: str, format_id: str):
-    db = SessionLocal()
     last_update = 0
 
     try:
-        download = db.query(Download).filter(Download.id == download_id).first()
-        download.status = DownloadStatus.DOWNLOADING
-        db.commit()
+        job = get_job(download_id)
+        if job:
+            job["status"] = "downloading"
+            set_job(download_id, job)
 
         def progress_callback(d):
             nonlocal last_update
@@ -52,13 +48,14 @@ def download_video_task(self, download_id: str, url: str, format_id: str):
             url, format_id, settings.DOWNLOADS_DIR, progress_callback
         )
 
-        download.status = DownloadStatus.COMPLETED
-        download.filename = result["filename"]
-        download.title = result.get("title") or download.title
-        download.filesize = result.get("filesize")
-        download.progress = 100.0
-        download.completed_at = func.now()
-        db.commit()
+        job = get_job(download_id)
+        if job:
+            job["status"] = "completed"
+            job["filename"] = result["filename"]
+            job["title"] = result.get("title") or job.get("title")
+            job["filesize"] = result.get("filesize")
+            job["progress"] = 100.0
+            set_job(download_id, job)
 
         set_progress(download_id, {
             "status": "completed",
@@ -69,11 +66,11 @@ def download_video_task(self, download_id: str, url: str, format_id: str):
         return {"download_id": download_id, "filename": result["filename"]}
 
     except Exception as e:
-        download = db.query(Download).filter(Download.id == download_id).first()
-        if download:
-            download.status = DownloadStatus.FAILED
-            download.error_message = str(e)[:500]
-            db.commit()
+        job = get_job(download_id)
+        if job:
+            job["status"] = "failed"
+            job["error_message"] = str(e)[:500]
+            set_job(download_id, job)
 
         set_progress(download_id, {
             "status": "failed",
@@ -81,6 +78,3 @@ def download_video_task(self, download_id: str, url: str, format_id: str):
             "error": str(e)[:500],
         })
         raise
-
-    finally:
-        db.close()
